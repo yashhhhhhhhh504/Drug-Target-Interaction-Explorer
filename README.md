@@ -8,15 +8,19 @@ A fully local, offline-capable RAG pipeline for drug discovery research. It inge
 
  BTK (Bruton's tyrosine kinase) is a non-receptor tyrosine kinase
  indispensable for B lymphocyte development, differentiation and signaling.
- BTK is associated with X-linked agammaglobulinemia [Source 7].
- The most potent compound is CHEMBL458333 (Ki=0.25 nM) [Source 1].
- CHEMBL1916891 shows 873x selectivity for BTK over FRK (IC50=0.7 nM) [Source 1]...
+ BTK is associated with X-linked agammaglobulinemia.
+ The most potent compound is CHEMBL458333 (Ki=0.25 nM).
+ CHEMBL1916891 shows 873x selectivity for BTK over FRK (IC50=0.7 nM)...
 ```
 
 ---
 
 ## Table of Contents
 
+- [What This Project Does](#what-this-project-does)
+- [The Problem: Why Drug Discovery Needs RAG](#the-problem-why-drug-discovery-needs-rag)
+- [How RAG Solves This](#how-rag-solves-this)
+- [Who Benefits](#who-benefits)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
@@ -26,13 +30,127 @@ A fully local, offline-capable RAG pipeline for drug discovery research. It inge
 - [Configuration](#configuration)
 - [LLM Providers](#llm-providers)
 - [Data Sources](#data-sources)
+- [Cross-Source ID Mapping](#cross-source-id-mapping)
 - [Document Types](#document-types)
 - [Knowledge Graph](#knowledge-graph)
 - [Retrieval Pipeline](#retrieval-pipeline)
 - [Benchmark Prompts](#benchmark-prompts)
 - [Project Structure](#project-structure)
+- [Experiment Tracking](#experiment-tracking)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+
+---
+
+## What This Project Does
+
+Drug discovery generates massive volumes of structured bioactivity data spread across disconnected public databases — ChEMBL holds 2.4M+ compounds with IC50/Ki/EC50 measurements, UniProt catalogs 570K+ reviewed protein entries with GO annotations and disease links, BindingDB stores 2.9M+ binding affinities, and PubChem contains 116M+ compounds with BioAssay results. A medicinal chemist investigating a single target like EGFR might need to cross-reference all four databases to answer a straightforward question like "Which compounds inhibit EGFR with sub-100nM potency, and are any of them selective over HER2?"
+
+This project solves that problem by:
+
+1. **Ingesting** target and compound data from 4 databases (5 with DrugBank) into a unified dataset
+2. **Mapping IDs across sources** — ChEMBL IDs are linked to UniProt accessions, which unlocks BindingDB lookups for targets that ChEMBL discovered
+3. **Building 7 specialized document types** — not just raw data, but precomputed selectivity rankings, evidence quality scores, and assay discrepancy flags
+4. **Constructing a knowledge graph** connecting proteins, compounds, diseases, GO terms, and protein families
+5. **Answering natural language questions** with cited, quantitative evidence using a biomedically-tuned retrieval pipeline and LLM
+
+The result is a system where a researcher can type:
+
+```
+"Which kinase inhibitors show >10x selectivity for BTK over MAP4K5,
+ and how confident is the evidence?"
+```
+
+...and get a sourced answer with specific IC50 values, selectivity ratios, assay counts, and caveats about IC50 vs Ki comparisons — in 15-30 seconds, running entirely on their laptop.
+
+---
+
+## The Problem: Why Drug Discovery Needs RAG
+
+### LLMs alone are not enough for drug discovery
+
+Large language models have broad biomedical knowledge from their training data, but they have critical limitations for real drug discovery work:
+
+| Problem | What Happens | Consequence |
+|---------|-------------|-------------|
+| **Hallucinated values** | LLM invents "IC50 = 3.2 nM" for a compound it vaguely recalls | Wrong potency data leads to bad target prioritization |
+| **Stale training data** | Model was trained before the latest ChEMBL release | Misses recently published compounds and revised activity values |
+| **No provenance** | "Gefitinib inhibits EGFR" — from which assay? What Ki? Binding or functional? | Cannot assess evidence quality or reproduce the finding |
+| **No selectivity reasoning** | Can't compute that Compound X has 47x selectivity for Target A over B | Selectivity is the #1 factor in clinical candidate selection |
+| **Cross-database blind spots** | Doesn't know that ChEMBL CHEMBL203 = UniProt P00533 = BindingDB target | Misses Ki/Kd data that only exists in BindingDB for that target |
+| **No evidence quality awareness** | Treats a single-assay measurement the same as one replicated across 12 publications | Overconfidence in weak data, underconfidence in strong data |
+
+### What researchers actually need
+
+A medicinal chemist evaluating a target needs answers like:
+
+> "CHEMBL1997617 inhibits BTK with IC50 = 0.4 nM (pChEMBL 9.40) from 3 independent binding assays across 2 publications. It shows 79x selectivity over MAP4K5 (IC50 = 31.6 nM). **Caveat**: the BTK value is IC50 while the MAP4K5 value is also IC50, so this is a direct comparison. Confidence score: 72/100 (well-validated)." [Source 1, Source 3]
+
+This requires **grounded retrieval** — the answer must come from actual data, with citations, specific values, methodology awareness, and uncertainty quantification.
+
+---
+
+## How RAG Solves This
+
+RAG (Retrieval-Augmented Generation) bridges the gap between an LLM's language capabilities and a database's factual precision:
+
+```
+Traditional LLM:
+  Question → LLM (training data) → Answer (may hallucinate)
+
+RAG Pipeline:
+  Question → Retrieve relevant documents → LLM (reads documents) → Answer (grounded + cited)
+```
+
+### This project's RAG stack
+
+| Component | Technology | Why This Choice |
+|-----------|-----------|----------------|
+| **Embeddings** | BioLORD-2023 | Trained on PubMed + clinical trials — understands that "EGFR" and "Epidermal growth factor receptor" are the same thing, that "IC50" relates to "potency", and that "kinase" relates to "phosphorylation" |
+| **Vector store** | ChromaDB | Persistent, local, no server needed — keeps all data on your machine |
+| **Reranker** | ms-marco-MiniLM-L-12-v2 | Cross-encoder that scores (query, document) pairs — catches documents that vector search underranked |
+| **Knowledge graph** | Custom (D3.js visualization) | Adds biological context (diseases, pathways, GO terms) that pure text retrieval misses |
+| **LLM** | Phi-3-mini (local) / Claude (cloud) | Generates fluent answers from retrieved evidence with anti-hallucination guardrails |
+
+### What makes this RAG different from generic RAG
+
+1. **Domain-specific embeddings** — BioLORD understands biomedical semantics; a generic embedder would miss that "Ki = 0.7 nM" and "sub-nanomolar binding affinity" mean the same thing
+
+2. **Precomputed analytical documents** — Instead of just storing raw activity records, the pipeline precomputes selectivity rankings, evidence quality scores, and assay discrepancy reports. The LLM reads conclusions, not raw data.
+
+3. **Cross-encoder reranking with document injection** — BioLORD can't distinguish "selectivity for A over B" from "selectivity for B over A" at the embedding level. The pipeline injects both directional documents and lets the cross-encoder pick the correct one.
+
+4. **Knowledge graph enrichment** — Vector search alone can't answer "What diseases could be treated by inhibiting BTK?" because disease associations live in a different data structure than activity measurements. The graph traversal adds this context automatically.
+
+5. **Anti-hallucination system prompt** — The LLM is explicitly instructed to:
+   - Never invent activity values
+   - Distinguish between "relevant" (retrieval score) and "confident" (evidence quality)
+   - Flag when comparing IC50 vs Ki (different assay methodologies)
+   - Say "insufficient data" when the evidence doesn't support a conclusion
+
+---
+
+## Who Benefits
+
+### Medicinal Chemists
+- Ask questions about target selectivity without manually cross-referencing 4 databases
+- Get precomputed selectivity ratios instead of calculating them from raw IC50 tables
+- Evidence quality scores flag which measurements are well-validated vs. single-assay
+
+### Computational Biologists
+- Knowledge graph connects targets → diseases → GO terms → pathways in one queryable structure
+- Explore multi-hop relationships: "How is EGFR connected to non-small cell lung carcinoma through its signaling pathway?"
+- All data is in structured JSONL — easy to feed into downstream ML pipelines
+
+### Drug Discovery Teams
+- Quick target assessment: "Is BTK a good drug target? What's the evidence?"
+- Competitive landscape: "Which BTK inhibitors exist and how selective are they?"
+- Data quality audit: "Are there assay discrepancies in our kinase dataset?"
+
+### Students and Researchers
+- Learn drug discovery concepts through interactive Q&A
+- Explore the knowledge graph visually (D3.js HTML viewer)
+- Runs fully offline on a laptop — no API keys, no cloud, no cost
 
 ---
 
@@ -440,6 +558,44 @@ sources:
 
 ---
 
+## Cross-Source ID Mapping
+
+A critical challenge in multi-database drug discovery is that each database uses its own identifiers:
+
+| Database | Example Target ID | Format |
+|----------|-------------------|--------|
+| ChEMBL | CHEMBL203 | `CHEMBL` + number |
+| UniProt | P00533 | 6-10 character accession (e.g. `P00533`, `Q9Y6K9`) |
+| PubChem | pubchem_gene_EGFR | Gene symbol prefix |
+| BindingDB | (uses UniProt accessions) | Requires `P00533`-style IDs |
+| DrugBank | DB_target_BE0000048 | `DB_target_` prefix |
+
+**The problem**: ChEMBL discovers a target as `CHEMBL203` (EGFR). BindingDB has Ki/Kd data for that same protein, but only accessible via its UniProt accession `P00533`. Without ID mapping, BindingDB returns zero results for ChEMBL-discovered targets.
+
+**The solution**: The ingest stage performs cross-source ID mapping in three steps:
+
+1. **ChEMBL fetches targets** → discovers `CHEMBL203` (EGFR)
+2. **UniProt enrichment** looks up the gene name, finds accession `P00533`, and attaches it as `uniprot_id`
+3. **ID mapping table** is built: `{CHEMBL203: P00533, CHEMBL4014: P15056, ...}`
+4. **BindingDB receives mapped IDs** — when fetching activities for `CHEMBL203`, the system passes `P00533` instead
+5. **Activity records are normalized** — `target_id` is set back to the canonical ID (`CHEMBL203`) so downstream chunking, graph building, and retrieval all join on a single key
+
+This enables BindingDB to contribute Ki/Kd binding data for every target that ChEMBL discovers, as long as UniProt has a matching entry (which covers >95% of human protein targets).
+
+```
+ChEMBL:    CHEMBL203 (EGFR) ──── IC50 data ────→ compounds.jsonl
+                │
+        UniProt enrichment
+                │
+                ▼
+           P00533 (mapped)
+                │
+BindingDB: P00533 (EGFR) ─────── Ki/Kd data ──→ compounds.jsonl
+                                                   (target_id = CHEMBL203)
+```
+
+---
+
 ## Document Types
 
 The pipeline generates 7 specialized document types, each optimized for different query patterns:
@@ -652,6 +808,25 @@ drug-target-explorer/
 
 ---
 
+## Experiment Tracking
+
+Every pipeline stage logs parameters, metrics, and artifacts to MLflow:
+
+```bash
+./start.sh mlflow    # Opens UI at http://127.0.0.1:5000
+```
+
+| Stage | Parameters Logged | Metrics Logged |
+|-------|------------------|----------------|
+| **Ingest** | target_families, activity_types, active_sources, max_compounds_per_target | targets_fetched, compounds_fetched, failed_targets, targets_with_uniprot_mapping |
+| **Embed** | embedding_provider, embedding_model | documents_total, documents_embedded, documents_skipped |
+| **Graph** | graph_status | graph_nodes, graph_edges, targets_in_graph, compounds_in_graph |
+| **Query** | query, llm_provider, embedding_provider, rerank_top_k, graph_available | candidates_retrieved, top_rerank_score, min_rerank_score, answer_length |
+
+MLflow stores data in `mlruns.db` (SQLite). Each query is a separate run, making it easy to compare retrieval quality across different configurations or data versions.
+
+---
+
 ## Troubleshooting
 
 ### "command not found: dti"
@@ -659,7 +834,7 @@ drug-target-explorer/
 You need to be in the project directory with the venv activated:
 
 ```bash
-cd /path/to/drug-target-explorer
+cd drug-target-explorer
 source .venv/bin/activate
 dti --version
 ```
