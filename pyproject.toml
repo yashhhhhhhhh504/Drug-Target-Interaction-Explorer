@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dti"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "chembl-webresource-client>=0.10",
+    "requests>=2.31",
+    "chromadb>=0.5",
+    "sentence-transformers>=3.0",
+    "openai>=1.30",
+    "anthropic>=0.28",
+    "graphifyy>=0.3",
+    "mlflow>=2.13",
+    "tqdm>=4.66",
+    "tenacity>=8.3",
+    "transformers>=4.40",
+    "accelerate>=0.30",
+    "huggingface_hub>=0.23",
+    "rdkit>=2024.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+]
+
+[project.scripts]
+dti = "dti.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,56 @@
+embedding:
+  provider: biolord          # BioLORD is the recommended default — biomedically tuned, runs locally
+                             # alternatives: "openai" | "ollama" (set via EMBEDDING_PROVIDER env var)
+  biolord_model: FremyCompany/BioLORD-2023
+  openai_model: text-embedding-3-large
+  ollama_model: nomic-embed-text   # pull with: ollama pull nomic-embed-text
+  ollama_base_url: http://localhost:11434
+
+llm:
+  provider: local            # env: LLM_PROVIDER — "anthropic" | "ollama" | "local"
+  anthropic_model: claude-sonnet-4-6-20251001
+  ollama_model: llama3.2
+  ollama_base_url: http://localhost:11434
+
+  # Local HuggingFace LLM — runs fully offline, no API key needed
+  # Default (3.8B, ~4GB, 4k context, fast on Apple Silicon):
+  local_model: microsoft/Phi-3-mini-4k-instruct
+  # 128k variant (same model, large context — needs 24GB+ GPU memory):
+  # local_model: microsoft/Phi-3-mini-128k-instruct
+  # Biomedical option (7B, ~8GB, fine-tuned on PubMed/medical text):
+  # local_model: BioMistral/BioMistral-7B-DARE
+  local_device: auto         # "auto" → MPS on Apple Silicon, CUDA on GPU, else CPU
+  local_max_new_tokens: 500
+
+retrieval:
+  initial_k: 50
+  rerank_top_k: 8
+  reranker_model: cross-encoder/ms-marco-MiniLM-L-12-v2
+
+data:
+  raw_dir: data/raw
+  docs_dir: data/docs
+  graph_dir: data/graph
+  db_dir: db/chromadb
+
+ingest:
+  target_families:
+    - kinase
+    - gpcr
+    - nuclear_receptor
+  activity_types:
+    - IC50
+    - Ki
+    - EC50
+  max_compounds_per_target: 5000
+
+sources:
+  chembl: true
+  uniprot: true
+  pubchem: true
+  bindingdb: true            # Enriches UniProt-accession targets with Ki/Kd from BindingDB
+  drugbank: false            # Requires DRUGBANK_API_KEY env var
+
+mlflow:
+  tracking_uri: sqlite:///mlruns.db   # SQLite backend (filesystem store deprecated Feb 2026)
+  experiment_name: drug-target-explorer
